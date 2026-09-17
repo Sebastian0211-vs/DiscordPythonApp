@@ -1,5 +1,6 @@
-# Libraries available to scripts run in the sandbox (no network at runtime,
-# so everything a script needs must be installed here). Rebuild the image after editing.
+# Libraries available to scripts and notebooks in the sandbox. The sandbox filesystem is
+# read-only, so scripts can't pip install: add what you need here, then rebuild the image:
+#   sudo docker build -t remotepy-sandbox:latest sandbox/
 numpy
 pandas
 scipy
@@ -9,8 +10,13 @@ sympy
 pillow
 scikit-learn
 tabulate
-# so code copied from Jupyter notebooks (from IPython.display import display) still runs
+requests
+beautifulsoup4
+# Jupyter: runs uploaded .ipynb notebooks, and notebook-style imports (IPython.display) work in scripts
 ipython
+ipykernel
+nbclient
+nbformat
 # CPU-only PyTorch adds ~1 GB to the image; uncomment if you want it:
 # --extra-index-url https://download.pytorch.org/whl/cpu
 # torch

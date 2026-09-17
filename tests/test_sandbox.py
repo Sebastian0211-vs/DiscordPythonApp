@@ -161,3 +161,65 @@ def test_plt_show_saves_figures_and_ipython_available():
     """, SandboxConfig(timeout=30))
     assert r.ok, r.output
     assert [f.name for f in r.files] == ["figure_1.png", "figure_2.png"]
+
+
+NOTEBOOK = {
+    "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+    "cells": [
+        {"cell_type": "markdown", "metadata": {}, "source": "# Hello"},
+        {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+         "source": "import pandas as pd\ndf = pd.read_csv('data.csv')\nprint('rows', len(df))\ndf"},
+        {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+         "source": "import matplotlib.pyplot as plt\nplt.plot([1, 2, 3])\nplt.show()"},
+        {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [], "source": "1/0"},
+        {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [], "source": "print('never')"},
+    ],
+}
+
+
+def test_notebook_cell_by_cell():
+    import json
+    r = asyncio.run(Sandbox(SandboxConfig(notebook_timeout=60)).run(
+        json.dumps(NOTEBOOK), [("data.csv", b"a,b\n1,2\n3,4\n")], notebook=True))
+    assert r.cells is not None and r.error is None, r
+    md, c1, c2, c3, c4 = r.cells
+    assert md.type == "markdown"
+    text = c1.outputs[0].text
+    assert "rows 2" in text and "a  b" in text  # print output and the DataFrame repr
+    assert [o.kind for o in c2.outputs] == ["image"] and c2.outputs[0].data[:4] == b"\x89PNG"
+    assert c3.error and "ZeroDivisionError" in c3.outputs[0].text
+    assert c4.execution_count is None and not c4.outputs  # stopped at the error
+    assert r.exit_code == 1 and r.notebook and b"ZeroDivisionError" in r.notebook
+
+
+def test_notebook_timeout():
+    import json
+    nb = dict(NOTEBOOK, cells=[{"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+                                "source": "import time\nprint('start', flush=True)\ntime.sleep(60)"}])
+    r = asyncio.run(Sandbox(SandboxConfig(notebook_timeout=8)).run(json.dumps(nb), notebook=True))
+    assert r.timed_out and "start" in r.cells[0].outputs[0].text
+
+
+def test_invalid_notebook():
+    r = asyncio.run(Sandbox(CFG).run("not json", notebook=True))
+    assert r.error and "Not a valid notebook" in r.error
+
+
+def _network_exists(name: str) -> bool:
+    return subprocess.run(["docker", "network", "inspect", name], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _network_exists("remotepy-net"), reason="run sudo sandbox/network-setup.sh first")
+def test_internet_network_blocks_host_and_private_ranges():
+    r = run("""
+        import socket
+        for host, port in [("172.30.254.1", 22), ("10.0.0.1", 80), ("169.254.169.254", 80), ("192.168.1.1", 80)]:
+            try:
+                socket.create_connection((host, port), timeout=2).close()
+                print("REACHED", host)
+            except OSError:
+                print("blocked", host)
+        print("dns", socket.gethostbyname("pypi.org"))
+    """, SandboxConfig(timeout=20, network="remotepy-net"))
+    assert "REACHED" not in r.output and r.output.count("blocked") == 4, r.output
+    assert "dns " in r.output

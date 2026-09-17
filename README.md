@@ -11,8 +11,9 @@ is posted in the chat for everyone there to see.
 |---|---|
 | `/run` | opens a box to paste code (code fences are fine), then posts the result |
 | `/run file:script.py` | runs an attached `.py` file |
+| `/run file:notebook.ipynb` | runs a Jupyter notebook cell by cell and posts one embed per cell (code, output, plots) |
 | `/run data1:data.csv` | adds a data file (up to `data1`, `data2`, `data3`), with either of the above |
-| Right-click a message > **Apps** > **Run Python** | runs the ` ```python ` block or `.py` file in that message; its other attachments become data files |
+| Right-click a message > **Apps** > **Run Python** | runs the ` ```python ` block, `.py` or `.ipynb` file in that message; its other attachments become data files |
 | `/ids` | shows your user ID and the current chat's ID, only to you |
 
 A user-installed app can't read chat messages, so it never runs code on its own:
@@ -27,9 +28,15 @@ somebody on the allowlist has to trigger it with one of the above.
   full log as `output.txt`. Files the script creates or changes in its folder are attached
   (max 8 files, 8 MB), and `plt.show()` saves each figure as `figure_1.png`, `figure_2.png`, ...
   Code pasted or uploaded through `/run` is attached too, so the chat can see what ran.
-- **Libraries:** numpy, pandas, scipy, matplotlib, seaborn, sympy, pillow,
-  scikit-learn, tabulate, ipython. Edit `sandbox/requirements.txt` and rebuild to change.
-  Scripts cannot `pip install` at runtime (no network).
+- **Notebooks:** cells run in a real Jupyter kernel, top to bottom, stopping at the first
+  error like "Run All". Each cell becomes an embed (red if it failed, grey if it never ran)
+  with its output and inline plots, and the executed `.ipynb` is attached at the end.
+  Notebooks get `NOTEBOOK_TIMEOUT` (120 s) in total.
+- **Internet:** scripts can download (`requests.get(...)`) once the firewalled network is set
+  up (step 2). They can't reach the VPS itself, other containers or private networks.
+- **Libraries:** numpy, pandas, scipy, matplotlib, seaborn, sympy, pillow, scikit-learn,
+  tabulate, requests, beautifulsoup4, ipython, ipykernel. To add one, put it in
+  `sandbox/requirements.txt` and rebuild the sandbox image (no bot restart needed).
 
 ## How it works
 
@@ -43,7 +50,7 @@ somebody on the allowlist has to trigger it with one of the above.
 
 | Restriction | Setting |
 |---|---|
-| Network | `--network none` |
+| Network | `remotepy-net`: public internet only; the VPS, other containers, private ranges and cloud metadata are firewalled (`SANDBOX_NETWORK=none` for no network) |
 | Filesystem | read-only root, 128 MB `noexec` tmpfs on `/tmp`, nothing from the host mounted |
 | User | uid 10001, `--cap-drop ALL`, `no-new-privileges` |
 | Resources | 512 MB RAM (no swap), 1 CPU, 128 processes, 256 open files |
@@ -91,6 +98,7 @@ On the VPS:
 ```bash
 cd ~/remotePython
 docker build -t remotepy-sandbox:latest sandbox/   # the image scripts run in
+sudo bash sandbox/network-setup.sh --install          # firewalled internet for scripts
 cp .env.example .env && nano .env                  # token and your user ID
 docker compose up -d --build                       # start the bot
 docker compose logs -f bot                         # should say "Synced 3 global commands"
@@ -134,6 +142,10 @@ Then set `SANDBOX_RUNTIME=runsc` in `.env` and `docker compose up -d`.
 
 ## Security notes
 
+- **Internet access means the VPS IP is used for whatever a script downloads or sends.**
+  The firewall stops scripts from touching the VPS and your other services, not from
+  misbehaving on the internet, so the allowlist matters. `sudo bash sandbox/network-setup.sh --status`
+  shows the rules and how many packets they blocked.
 - **The Docker socket is powerful.** The bot container can start any container,
   which is root-equivalent on the VPS. The bot never runs user code itself, only
   passes it on stdin to the sandbox, but keep the bot token secret (reset it in
@@ -152,7 +164,7 @@ uv run pytest            # unit tests; sandbox tests run too if Docker + the ima
 
 `tests/test_sandbox.py` includes hostile scripts (network access, writing to
 system paths, fork bomb, 1 GB allocation, infinite output, infinite loop) that
-must all be contained.
+must all be contained, plus notebook runs and (when `remotepy-net` exists) the firewall.
 
 ## Layout
 
@@ -160,6 +172,7 @@ must all be contained.
 sandbox/Dockerfile        image the scripts run in
 sandbox/runner.py         runs inside it: executes the script with its data files, returns JSON with output + files
 sandbox/mpl_autosave.py   matplotlib backend that turns plt.show() into saved PNGs
+sandbox/network-setup.sh  creates the firewalled remotepy-net network (run once with sudo)
 src/remotepy/sandbox.py   starts sandbox containers with all restrictions (also the remotepy-run CLI)
 src/remotepy/bot.py       Discord app: /run, /ids and the "Run Python" message command
 src/remotepy/messages.py  code extraction and reply formatting

@@ -57,3 +57,54 @@ def test_prefix_counts_toward_limit():
     content, _ = format_result(RunResult(0, False, 1.0, "y" * 5000), prefix=prefix)
     assert content.startswith(prefix) and len(content) <= DISCORD_LIMIT
     assert content.count("```") == 2
+
+
+# ------------------------------------------------------------------ notebooks
+from remotepy.messages import BYTES_PER_MESSAGE, EMBED_CHARS_PER_MESSAGE, notebook_messages  # noqa: E402
+from remotepy.sandbox import CellOutput, NotebookCell  # noqa: E402
+
+
+def _nb_result(cells, **kw):
+    return RunResult(kw.pop("exit_code", 0), kw.pop("timed_out", False), 1.5, "", cells=cells,
+                     notebook=b"{}", **kw)
+
+
+def test_notebook_one_embed_per_cell_with_image():
+    cells = [
+        NotebookCell("markdown", "# Title"),
+        NotebookCell("code", "print(1)", 1, [CellOutput("text", "1\n")]),
+        NotebookCell("code", "plt.show()", 2, [CellOutput("image", name="cell3_1.png", data=b"png")]),
+    ]
+    msgs = notebook_messages(_nb_result(cells), "@seb ran notebook `a.ipynb`\n", "a.ipynb")
+    assert len(msgs) == 1
+    m = msgs[0]
+    assert "all 2 code cells ran" in m.content
+    assert [e.title for e in m.embeds] == ["", "In [1]", "In [2]"]
+    assert m.embeds[2].image == "cell3_1.png"
+    assert [n for n, _ in m.files] == ["cell3_1.png", "a.executed.ipynb"]
+
+
+def test_notebook_error_and_not_run_cells():
+    cells = [
+        NotebookCell("code", "1/0", 1, [CellOutput("text", "ZeroDivisionError: division by zero\n")], error=True),
+        NotebookCell("code", "print('never')", None),
+    ]
+    msgs = notebook_messages(_nb_result(cells, exit_code=1), "", "a.ipynb")
+    assert "stopped at In [1]" in msgs[0].content
+    assert msgs[0].embeds[0].color != msgs[0].embeds[1].color
+    assert msgs[0].embeds[1].title == "In [ ] (not run)"
+
+
+def test_notebook_splits_messages_within_limits():
+    big = "x" * 1400
+    cells = [NotebookCell("code", big, i, [CellOutput("text", big),
+                                           CellOutput("image", name=f"c{i}.png", data=b"0" * 3_000_000)])
+             for i in range(1, 30)]
+    msgs = notebook_messages(_nb_result(cells), "", "a.ipynb")
+    assert 1 < len(msgs) <= 9
+    for m in msgs:
+        assert len(m.embeds) <= 10 and len(m.files) <= 10
+        assert sum(e.size for e in m.embeds) <= EMBED_CHARS_PER_MESSAGE
+        assert sum(len(d) for _, d in m.files) <= BYTES_PER_MESSAGE
+        assert all(len(e.description) <= 4096 for e in m.embeds)
+    assert "not shown" in msgs[-1].content

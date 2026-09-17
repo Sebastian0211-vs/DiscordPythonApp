@@ -5,9 +5,10 @@ read chat messages. You trigger it explicitly:
 
   /run                          opens a box to paste code
   /run file:<script.py>         runs an attached .py file
+  /run file:<notebook.ipynb>    runs a notebook cell by cell, one embed per cell
   /run data1:<data.csv> ...     adds up to 3 data files (with either of the above)
   Right-click a message > Apps > Run Python
-                                runs the ```python block or .py file in that message;
+                                runs the ```python block, .py or .ipynb file in that message;
                                 the message's other attachments are the data files
   /ids                          shows your user ID and this chat's ID (only to you)
 
@@ -24,7 +25,7 @@ import discord
 from discord import app_commands
 
 from .config import BotConfig, SandboxConfig
-from .messages import extract_code_block, format_result, status_line
+from .messages import MessageSpec, extract_code_block, format_result, notebook_messages, notebook_status, status_line
 from .sandbox import Sandbox
 
 log = logging.getLogger("remotepy")
@@ -51,6 +52,25 @@ class CodeModal(discord.ui.Modal, title="Run Python"):
         raw = self.code.value
         code = extract_code_block(raw, any_language=True) or raw  # tolerate pasted ``` fences
         await self.bot.execute(interaction, code=code, data=self.data, label="some code", attach_code=True)
+
+
+def _is_code(att: discord.Attachment) -> bool:
+    return att.filename.lower().endswith((".py", ".ipynb"))
+
+
+def _is_notebook(att: discord.Attachment | None) -> bool:
+    return att is not None and att.filename.lower().endswith(".ipynb")
+
+
+def _to_discord(spec: MessageSpec) -> dict:
+    embeds = []
+    for e in spec.embeds:
+        embed = discord.Embed(title=e.title or None, description=e.description or None, color=e.color)
+        if e.image:
+            embed.set_image(url=f"attachment://{e.image}")
+        embeds.append(embed)
+    files = [discord.File(io.BytesIO(d), filename=n) for n, d in spec.files]
+    return {"content": spec.content or None, "embeds": embeds, "files": files}
 
 
 def _names(atts: Sequence[discord.Attachment]) -> str:
@@ -82,7 +102,7 @@ class RunnerBot(discord.Client):
 
         @self.tree.command(name="run", description="Run Python in the sandbox and post the output here")
         @app_commands.describe(
-            file="A .py file to run. Leave empty to paste code instead.",
+            file="A .py script or .ipynb notebook to run. Leave empty to paste code instead.",
             data1="A data file the code needs (csv, json, txt, another .py to import...)",
             data2="Another data file",
             data3="Another data file",
@@ -97,9 +117,10 @@ class RunnerBot(discord.Client):
             if not await bot._check_allowed(interaction):
                 return
             data = [a for a in (data1, data2, data3) if a is not None]
-            if file is not None and not file.filename.lower().endswith(".py"):
+            if file is not None and not _is_code(file):
                 await interaction.response.send_message(
-                    "`file` must be a `.py` script. Put data files in `data1`, `data2`, `data3`.", ephemeral=True)
+                    "`file` must be a `.py` script or `.ipynb` notebook. Put data files in `data1`, `data2`, `data3`.",
+                    ephemeral=True)
                 return
             if problem := bot._size_problem(file, data):
                 await interaction.response.send_message(problem, ephemeral=True)
@@ -107,15 +128,21 @@ class RunnerBot(discord.Client):
             if file is None:
                 await interaction.response.send_modal(CodeModal(bot, data))
                 return
-            label = f"`{file.filename}`"
-            await bot.execute(interaction, code_file=file, data=data, label=label, attach_code=True)
+            kind = "notebook " if _is_notebook(file) else ""
+            await bot.execute(interaction, code_file=file, data=data, label=f"{kind}`{file.filename}`",
+                              attach_code=not _is_notebook(file))
 
         async def run_message(interaction: discord.Interaction, message: discord.Message) -> None:
             if not await bot._check_allowed(interaction):
                 return
+            notebooks = [a for a in message.attachments if _is_notebook(a)]
             scripts = [a for a in message.attachments if a.filename.lower().endswith(".py")]
             code = extract_code_block(message.content, any_language=True)
-            if code is not None:
+            if notebooks:
+                code, code_file = None, notebooks[0]
+                data = [a for a in message.attachments if a is not code_file]
+                label = f"notebook [`{code_file.filename}`]({message.jump_url})"
+            elif code is not None:
                 # Code block is the script; every attachment (including .py modules) is data.
                 code_file, data = None, list(message.attachments)
                 label = f"[a code block]({message.jump_url})"
@@ -125,7 +152,7 @@ class RunnerBot(discord.Client):
                 label = f"[`{code_file.filename}`]({message.jump_url})"
             else:
                 await interaction.response.send_message(
-                    "No code found: the message needs a ```python block or a `.py` file.", ephemeral=True)
+                    "No code found: the message needs a ```python block, a `.py` or an `.ipynb` file.", ephemeral=True)
                 return
             if code is not None and len(code.encode()) > bot.cfg.max_code_bytes:
                 await interaction.response.send_message("That code block is too large.", ephemeral=True)
@@ -157,8 +184,9 @@ class RunnerBot(discord.Client):
         return True
 
     def _size_problem(self, code_file: discord.Attachment | None, data: Sequence[discord.Attachment]) -> str | None:
-        if code_file is not None and code_file.size > self.cfg.max_code_bytes:
-            return f"`{code_file.filename}` is too large (max {self.cfg.max_code_bytes // 1000} KB)."
+        limit = self.cfg.max_data_bytes if _is_notebook(code_file) else self.cfg.max_code_bytes
+        if code_file is not None and code_file.size > limit:
+            return f"`{code_file.filename}` is too large (max {limit // 1000} KB)."
         total = sum(a.size for a in data)
         if total > self.cfg.max_data_bytes:
             return f"Data files are too large together ({total / 1e6:.1f} MB, max {self.cfg.max_data_bytes / 1e6:.0f} MB)."
@@ -190,15 +218,28 @@ class RunnerBot(discord.Client):
         digest = hashlib.sha256(code.encode()).hexdigest()[:12]
         log.info("Run by %s (%s) in channel %s: %s sha256=%s",
                  interaction.user, interaction.user.id, interaction.channel_id, label, digest)
+        notebook = _is_notebook(code_file)
         try:
-            result = await self.sandbox.run(code, files)
+            result = await self.sandbox.run(code, files, notebook=notebook)
         except Exception:
             log.exception("Sandbox failure")
             await interaction.followup.send("💥 Internal error while running the script (see bot logs).")
             return
 
+        prefix = f"{interaction.user.mention} ran {label}\n"
+        if result.cells is not None:
+            assert code_file is not None
+            log.info("Run sha256=%s finished: %s", digest, notebook_status(result)[1])
+            for spec in notebook_messages(result, prefix, code_file.filename):
+                try:
+                    await interaction.followup.send(**_to_discord(spec))
+                except discord.HTTPException as exc:
+                    log.warning("Notebook message failed (%s), sending text only", exc)
+                    await interaction.followup.send((spec.content or "") + "\n-# (part of the output could not be posted)")
+            return
+
         log.info("Run sha256=%s finished: %s", digest, status_line(result)[1])
-        content, attachments = format_result(result, prefix=f"{interaction.user.mention} ran {label}\n")
+        content, attachments = format_result(result, prefix=prefix)
         if attach_code:
             script_name = code_file.filename if code_file is not None else "main.py"
             attachments = [(script_name, code.encode()), *attachments][:10]

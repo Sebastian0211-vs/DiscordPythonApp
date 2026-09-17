@@ -13,7 +13,9 @@ def _ids(name: str) -> frozenset[int]:
 class SandboxConfig:
     image: str = "remotepy-sandbox:latest"
     runtime: str = ""  # e.g. "runsc" for gVisor; empty = Docker default (runc)
-    timeout: float = 30.0  # seconds the script may run
+    network: str = "none"  # "remotepy-net" (see sandbox/network-setup.sh) for internet access
+    timeout: float = 30.0  # seconds a script may run
+    notebook_timeout: float = 120.0  # seconds a whole notebook may run
     memory: str = "512m"
     cpus: str = "1.0"
     pids_limit: int = 128
@@ -28,7 +30,9 @@ class SandboxConfig:
         return cls(
             image=e("SANDBOX_IMAGE", cls.image),
             runtime=e("SANDBOX_RUNTIME", cls.runtime),
+            network=e("SANDBOX_NETWORK", cls.network) or "none",
             timeout=float(e("RUN_TIMEOUT", cls.timeout)),
+            notebook_timeout=float(e("NOTEBOOK_TIMEOUT", cls.notebook_timeout)),
             memory=e("SANDBOX_MEMORY", cls.memory),
             cpus=e("SANDBOX_CPUS", cls.cpus),
             pids_limit=int(e("SANDBOX_PIDS", cls.pids_limit)),
