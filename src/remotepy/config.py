@@ -44,6 +44,7 @@ class BotConfig:
     user_ids: frozenset[int]
     channel_ids: frozenset[int] = field(default_factory=frozenset)  # empty = any chat
     max_code_bytes: int = 100_000
+    max_data_bytes: int = 8_000_000  # total size of data files per run
 
     @classmethod
     def from_env(cls) -> "BotConfig":

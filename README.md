@@ -11,7 +11,8 @@ is posted in the chat for everyone there to see.
 |---|---|
 | `/run` | opens a box to paste code (code fences are fine), then posts the result |
 | `/run file:script.py` | runs an attached `.py` file |
-| Right-click a message > **Apps** > **Run Python** | runs the ` ```python ` block or `.py` file in that message |
+| `/run data1:data.csv` | adds a data file (up to `data1`, `data2`, `data3`), with either of the above |
+| Right-click a message > **Apps** > **Run Python** | runs the ` ```python ` block or `.py` file in that message; its other attachments become data files |
 | `/ids` | shows your user ID and the current chat's ID, only to you |
 
 A user-installed app can't read chat messages, so it never runs code on its own:
@@ -19,12 +20,15 @@ somebody on the allowlist has to trigger it with one of the above.
 
 - **Who can run code:** only `ALLOWED_USER_IDS`, optionally only in `ALLOWED_CHANNEL_IDS`.
   Anyone else gets a private "not allowed" message.
+- **Data files:** placed next to the script, so open them by name
+  (`pd.read_csv("data.csv")`). Extra `.py` files can be imported (`import helper`).
+  8 MB total per run.
 - **Output:** stdout and stderr merged. Long output shows its tail inline and the
-  full log as `output.txt`. Files written in the working directory
-  (`plt.savefig("plot.png")`, `df.to_csv("out.csv")`) are attached (max 8 files, 8 MB).
-  Code pasted or uploaded through `/run` is attached as `main.py` so the chat can see what ran.
+  full log as `output.txt`. Files the script creates or changes in its folder are attached
+  (max 8 files, 8 MB), and `plt.show()` saves each figure as `figure_1.png`, `figure_2.png`, ...
+  Code pasted or uploaded through `/run` is attached too, so the chat can see what ran.
 - **Libraries:** numpy, pandas, scipy, matplotlib, seaborn, sympy, pillow,
-  scikit-learn, tabulate. Edit `sandbox/requirements.txt` and rebuild to change.
+  scikit-learn, tabulate, ipython. Edit `sandbox/requirements.txt` and rebuild to change.
   Scripts cannot `pip install` at runtime (no network).
 
 ## How it works
@@ -154,7 +158,8 @@ must all be contained.
 
 ```
 sandbox/Dockerfile        image the scripts run in
-sandbox/runner.py         runs inside it: executes the script, returns JSON with output + files
+sandbox/runner.py         runs inside it: executes the script with its data files, returns JSON with output + files
+sandbox/mpl_autosave.py   matplotlib backend that turns plt.show() into saved PNGs
 src/remotepy/sandbox.py   starts sandbox containers with all restrictions (also the remotepy-run CLI)
 src/remotepy/bot.py       Discord app: /run, /ids and the "Run Python" message command
 src/remotepy/messages.py  code extraction and reply formatting

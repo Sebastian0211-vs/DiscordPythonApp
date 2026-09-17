@@ -9,6 +9,8 @@ sympy
 pillow
 scikit-learn
 tabulate
+# so code copied from Jupyter notebooks (from IPython.display import display) still runs
+ipython
 # CPU-only PyTorch adds ~1 GB to the image; uncomment if you want it:
 # --extra-index-url https://download.pytorch.org/whl/cpu
 # torch

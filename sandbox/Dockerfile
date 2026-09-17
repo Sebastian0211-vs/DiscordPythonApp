@@ -6,10 +6,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    MPLBACKEND=Agg \
+    MPLBACKEND=module://mpl_autosave \
+    PYTHONPATH=/opt/sandbox_lib \
     HOME=/tmp \
     MPLCONFIGDIR=/tmp/.mpl
 
+COPY mpl_autosave.py /opt/sandbox_lib/mpl_autosave.py
 COPY requirements.txt /opt/requirements.txt
 RUN pip install -r /opt/requirements.txt \
     && MPLCONFIGDIR=/opt/mplcache python -c "import matplotlib.pyplot" \

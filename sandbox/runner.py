@@ -1,18 +1,25 @@
 """Runs inside the sandbox container.
 
-Reads the user's script from stdin, runs it with a timeout, then prints ONE
-JSON document on stdout:
+Reads a JSON job from stdin:
+
+    {"code": str, "files": [{"name": str, "data": base64}]}
+
+The data files are written into the script's working directory, so the script can
+open them by name (pd.read_csv("data.csv")) or import them (import helper).
+
+Then it runs the script with a timeout and prints ONE JSON document on stdout:
 
     {"exit_code": int | null, "timed_out": bool, "duration": float,
      "output": str, "output_truncated": bool,
      "files": [{"name": str, "data": base64}], "files_skipped": [str]}
 
 stdout and stderr of the script are merged, like in a terminal.
-Any file the script writes in its working directory (e.g. plt.savefig("plot.png"))
-is sent back as an attachment, within limits.
+Files the script creates or modifies in its working directory (plt.savefig("plot.png"))
+are sent back; input files it left untouched are not.
 """
 
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -31,12 +38,31 @@ RUN_DIR = Path("/tmp/.run")
 WORK_DIR = Path("/tmp/work")
 
 
-def collect_files() -> tuple[list[dict], list[str]]:
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_inputs(files: list[dict]) -> dict[str, str]:
+    """Write data files into WORK_DIR by base name only. Returns {name: sha256}."""
+    written = {}
+    for f in files:
+        name = Path(str(f.get("name", ""))).name
+        if not name or name.startswith("."):
+            continue
+        path = WORK_DIR / name
+        path.write_bytes(base64.b64decode(f["data"]))
+        written[name] = _sha(path)
+    return written
+
+
+def collect_files(inputs: dict[str, str]) -> tuple[list[dict], list[str]]:
     files, skipped, total = [], [], 0
     for path in sorted(WORK_DIR.rglob("*")):
         if path.is_symlink() or not path.is_file():
             continue
         rel = str(path.relative_to(WORK_DIR))
+        if rel in inputs and _sha(path) == inputs[rel]:
+            continue  # an input file the script didn't change
         size = path.stat().st_size
         if len(files) >= MAX_FILES or total + size > MAX_FILES_BYTES:
             skipped.append(rel)
@@ -47,16 +73,21 @@ def collect_files() -> tuple[list[dict], list[str]]:
 
 
 def main() -> None:
-    code = sys.stdin.buffer.read()
+    job = json.loads(sys.stdin.buffer.read())
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     script = RUN_DIR / "main.py"
-    script.write_bytes(code)
+    script.write_text(job["code"])
+    inputs = write_inputs(job.get("files", []))
     out_path = RUN_DIR / "output.log"
 
     # Pre-built matplotlib font cache, so plots don't rebuild it on every run.
     if Path("/opt/mplcache").is_dir():
         shutil.copytree("/opt/mplcache", os.environ.get("MPLCONFIGDIR", "/tmp/.mpl"), dirs_exist_ok=True)
+
+    # Let the script import .py files that were uploaded as data (import helper).
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(WORK_DIR), env.get("PYTHONPATH", "")) if p)
 
     timed_out = False
     start = time.monotonic()
@@ -64,6 +95,7 @@ def main() -> None:
         proc = subprocess.Popen(
             [sys.executable, "-u", str(script)],
             cwd=WORK_DIR,
+            env=env,
             stdin=devnull,
             stdout=out,
             stderr=subprocess.STDOUT,
@@ -86,7 +118,7 @@ def main() -> None:
     truncated = len(raw) > MAX_OUTPUT
     output = raw[:MAX_OUTPUT].decode("utf-8", errors="replace")
 
-    files, skipped = collect_files()
+    files, skipped = collect_files(inputs)
     result = {
         "exit_code": None if timed_out else proc.returncode,
         "timed_out": timed_out,

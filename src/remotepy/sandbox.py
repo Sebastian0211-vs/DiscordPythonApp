@@ -1,7 +1,7 @@
 """Run untrusted Python code in a locked-down, throwaway Docker container.
 
-The script is piped in over stdin, so nothing from the host is mounted into the
-container. Isolation applied to every run:
+The script and its data files are piped in over stdin as JSON, so nothing from
+the host is mounted into the container. Isolation applied to every run:
 
 - no network (--network none)
 - read-only root filesystem, small noexec tmpfs for /tmp
@@ -16,6 +16,7 @@ import base64
 import json
 import sys
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from .config import SandboxConfig
@@ -87,11 +88,16 @@ class Sandbox:
     def queue_full(self) -> bool:
         return self._slots.locked()
 
-    async def run(self, code: str) -> RunResult:
+    async def run(self, code: str, files: Sequence[tuple[str, bytes]] = ()) -> RunResult:
+        """Run code. `files` are (name, content) pairs placed in the script's working directory."""
         async with self._slots:
-            return await self._run(code)
+            return await self._run(code, files)
 
-    async def _run(self, code: str) -> RunResult:
+    async def _run(self, code: str, files: Sequence[tuple[str, bytes]]) -> RunResult:
+        job = json.dumps({
+            "code": code,
+            "files": [{"name": n, "data": base64.b64encode(d).decode()} for n, d in files],
+        }).encode()
         name = f"remotepy-{uuid.uuid4().hex[:12]}"
         proc = await asyncio.create_subprocess_exec(
             *docker_command(self.cfg, name),
@@ -100,7 +106,7 @@ class Sandbox:
             stderr=asyncio.subprocess.PIPE,
         )
         assert proc.stdin and proc.stdout and proc.stderr
-        proc.stdin.write(code.encode())
+        proc.stdin.write(job)
         await proc.stdin.drain()
         proc.stdin.close()
 
@@ -163,11 +169,13 @@ def _cli() -> None:
 
     parser = argparse.ArgumentParser(description="Run a Python script in the sandbox")
     parser.add_argument("script", nargs="?", help="path to a .py file (default: stdin)")
+    parser.add_argument("--data", metavar="FILE", action="append", default=[], help="data file to include (repeatable)")
     parser.add_argument("--save-files", metavar="DIR", help="write output files into DIR")
     args = parser.parse_args()
     code = Path(args.script).read_text() if args.script else sys.stdin.read()
+    data = [(Path(p).name, Path(p).read_bytes()) for p in args.data]
 
-    result = asyncio.run(Sandbox(SandboxConfig.from_env()).run(code))
+    result = asyncio.run(Sandbox(SandboxConfig.from_env()).run(code, data))
     print(result.output, end="" if result.output.endswith("\n") or not result.output else "\n")
     status = result.error or ("TIMEOUT" if result.timed_out else f"exit {result.exit_code}")
     print(f"--- {status} in {result.duration:.2f}s, files: {[f.name for f in result.files]}", file=sys.stderr)
