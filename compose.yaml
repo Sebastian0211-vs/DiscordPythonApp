@@ -1,0 +1,22 @@
+# Build the sandbox image first:  docker build -t remotepy-sandbox:latest sandbox/
+# Then:                           docker compose up -d --build
+services:
+  bot:
+    build: .
+    image: remotepy-bot:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DOCKER_CONFIG: /tmp/.docker
+    volumes:
+      # Needed to start sandbox containers. Whoever controls the bot process
+      # controls Docker on the VPS, so keep the token and this server safe.
+      - /var/run/docker.sock:/var/run/docker.sock
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

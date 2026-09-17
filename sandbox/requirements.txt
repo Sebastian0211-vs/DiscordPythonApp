@@ -1,0 +1,14 @@
+# Libraries available to scripts run in the sandbox (no network at runtime,
+# so everything a script needs must be installed here). Rebuild the image after editing.
+numpy
+pandas
+scipy
+matplotlib
+seaborn
+sympy
+pillow
+scikit-learn
+tabulate
+# CPU-only PyTorch adds ~1 GB to the image; uncomment if you want it:
+# --extra-index-url https://download.pytorch.org/whl/cpu
+# torch
