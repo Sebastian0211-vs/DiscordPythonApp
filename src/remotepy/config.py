@@ -49,6 +49,9 @@ class BotConfig:
     channel_ids: frozenset[int] = field(default_factory=frozenset)  # empty = any chat
     max_code_bytes: int = 100_000
     max_data_bytes: int = 8_000_000  # total size of data files per run
+    pages_url: str = ""  # public base URL of the web container, e.g. https://plots.example.com
+    pages_dir: str = "/pages"
+    pages_ttl_days: float = 7.0
 
     @classmethod
     def from_env(cls) -> "BotConfig":
@@ -56,6 +59,9 @@ class BotConfig:
             token=os.environ.get("DISCORD_TOKEN", ""),
             user_ids=_ids("ALLOWED_USER_IDS"),
             channel_ids=_ids("ALLOWED_CHANNEL_IDS"),
+            pages_url=os.environ.get("PAGES_URL", "").strip(),
+            pages_dir=os.environ.get("PAGES_DIR", cls.pages_dir),
+            pages_ttl_days=float(os.environ.get("PAGES_TTL_DAYS", cls.pages_ttl_days)),
         )
         if not cfg.token:
             raise SystemExit("DISCORD_TOKEN is not set")

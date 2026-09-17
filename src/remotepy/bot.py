@@ -16,6 +16,8 @@ Data files land in the script's working directory: pd.read_csv("data.csv") just 
 and extra .py files can be imported. The output is posted publicly in the chat.
 """
 
+import asyncio
+import dataclasses
 import hashlib
 import io
 import logging
@@ -26,9 +28,13 @@ from discord import app_commands
 
 from .config import BotConfig, SandboxConfig
 from .messages import MessageSpec, extract_code_block, format_result, notebook_messages, notebook_status, status_line
-from .sandbox import Sandbox
+from .pages import PagePublisher
+from .sandbox import RunResult, Sandbox
 
 log = logging.getLogger("remotepy")
+
+FIREWALL_CHECK_EVERY = 300  # seconds
+PAGES_CLEANUP_EVERY = 3600  # seconds
 
 # Installed on user accounts only, usable in servers, the bot DM and group DMs.
 INSTALLS = app_commands.AppInstallationType(guild=False, user=True)
@@ -62,6 +68,15 @@ def _is_notebook(att: discord.Attachment | None) -> bool:
     return att is not None and att.filename.lower().endswith(".ipynb")
 
 
+def _link_view(links: Sequence[tuple[str, str]]) -> discord.ui.View | None:
+    if not links:
+        return None
+    view = discord.ui.View(timeout=None)
+    for name, url in list(links)[:25]:
+        view.add_item(discord.ui.Button(style=discord.ButtonStyle.link, label=f"📈 {name}"[:80], url=url))
+    return view
+
+
 def _to_discord(spec: MessageSpec) -> dict:
     embeds = []
     for e in spec.embeds:
@@ -70,7 +85,10 @@ def _to_discord(spec: MessageSpec) -> dict:
             embed.set_image(url=f"attachment://{e.image}")
         embeds.append(embed)
     files = [discord.File(io.BytesIO(d), filename=n) for n, d in spec.files]
-    return {"content": spec.content or None, "embeds": embeds, "files": files}
+    out = {"content": spec.content or None, "embeds": embeds, "files": files}
+    if view := _link_view(spec.links):
+        out["view"] = view
+    return out
 
 
 def _names(atts: Sequence[discord.Attachment]) -> str:
@@ -87,11 +105,60 @@ class RunnerBot(discord.Client):
         self.cfg = cfg
         self.sandbox = sandbox
         self.tree = app_commands.CommandTree(self, allowed_installs=INSTALLS, allowed_contexts=CONTEXTS)
+        self.firewall_problem: str | None = "the firewall has not been checked yet"
+        self.pages = PagePublisher(cfg.pages_dir, cfg.pages_url, cfg.pages_ttl_days) if cfg.pages_url else None
         self._register_commands()
 
     async def setup_hook(self) -> None:
+        await self._check_firewall()
+        self.loop.create_task(self._firewall_watch())
+        if self.pages:
+            self.loop.create_task(self._pages_cleanup())
+            log.info("Interactive plots are published under %s", self.cfg.pages_url)
         synced = await self.tree.sync()
         log.info("Synced %d global commands: %s", len(synced), [c.name for c in synced])
+
+    async def _check_firewall(self) -> None:
+        try:
+            problem = await self.sandbox.check_firewall()
+        except Exception as exc:
+            problem = f"the firewall check crashed: {exc}"
+        if problem and problem != self.firewall_problem:
+            log.error("Code execution paused: %s. Fix it on the VPS with: sudo bash sandbox/network-setup.sh --install",
+                      problem)
+        elif not problem and self.firewall_problem:
+            log.info("Sandbox network check passed (%s)", self.sandbox.cfg.network)
+        self.firewall_problem = problem
+
+    async def _pages_cleanup(self) -> None:
+        while True:
+            try:
+                removed = await asyncio.to_thread(self.pages.cleanup)
+                if removed:
+                    log.info("Deleted %d expired plot page folder(s)", removed)
+            except Exception:
+                log.exception("Page cleanup failed")
+            await asyncio.sleep(PAGES_CLEANUP_EVERY)
+
+    def _publish_pages(self, result: RunResult) -> tuple[RunResult, list[tuple[str, str]]]:
+        """Move .html output files to the web container. Without PAGES_URL they stay attachments."""
+        if not self.pages:
+            return result, []
+        html = [(f.name, f.data) for f in result.files if f.name.lower().endswith((".html", ".htm"))]
+        if not html:
+            return result, []
+        try:
+            links = self.pages.publish(html)
+        except OSError:
+            log.exception("Could not publish pages to %s", self.cfg.pages_dir)
+            return result, []
+        rest = [f for f in result.files if not f.name.lower().endswith((".html", ".htm"))]
+        return dataclasses.replace(result, files=rest), links
+
+    async def _firewall_watch(self) -> None:
+        while True:
+            await asyncio.sleep(FIREWALL_CHECK_EVERY)
+            await self._check_firewall()
 
     async def on_ready(self) -> None:
         log.info("Logged in as %s (app id %s)", self.user, self.application_id)
@@ -204,6 +271,13 @@ class RunnerBot(discord.Client):
     ) -> None:
         """Download what's needed, run it and post the result publicly as the interaction's response."""
         await interaction.response.defer(thinking=True)
+        if self.firewall_problem:
+            await self._check_firewall()  # maybe it was fixed since the last check
+        if self.firewall_problem:
+            await interaction.followup.send(
+                f"⛔ Code execution is paused: {self.firewall_problem}.\n"
+                "-# On the VPS: `sudo bash sandbox/network-setup.sh --install`")
+            return
         try:
             if code_file is not None:
                 code = (await code_file.read()).decode("utf-8", errors="replace")
@@ -227,10 +301,11 @@ class RunnerBot(discord.Client):
             return
 
         prefix = f"{interaction.user.mention} ran {label}\n"
+        result, links = self._publish_pages(result)
         if result.cells is not None:
             assert code_file is not None
             log.info("Run sha256=%s finished: %s", digest, notebook_status(result)[1])
-            for spec in notebook_messages(result, prefix, code_file.filename):
+            for spec in notebook_messages(result, prefix, code_file.filename, links):
                 try:
                     await interaction.followup.send(**_to_discord(spec))
                 except discord.HTTPException as exc:
@@ -244,11 +319,12 @@ class RunnerBot(discord.Client):
             script_name = code_file.filename if code_file is not None else "main.py"
             attachments = [(script_name, code.encode()), *attachments][:10]
         out = [discord.File(io.BytesIO(d), filename=n) for n, d in attachments]
+        extra = {"view": view} if (view := _link_view(links)) else {}
         try:
-            await interaction.followup.send(content, files=out)
+            await interaction.followup.send(content, files=out, **extra)
         except discord.HTTPException as exc:
             log.warning("Reply with files failed (%s), retrying without", exc)
-            await interaction.followup.send(content[:1900] + "\n-# (attachments could not be uploaded)")
+            await interaction.followup.send(content[:1900] + "\n-# (attachments could not be uploaded)", **extra)
 
 
 def main() -> None:

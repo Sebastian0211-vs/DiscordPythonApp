@@ -6,7 +6,7 @@
 #
 # Usage (on the VPS):
 #   sudo bash sandbox/network-setup.sh             create the network and apply the rules now
-#   sudo bash sandbox/network-setup.sh --install   same, plus re-apply automatically at every boot
+#   sudo bash sandbox/network-setup.sh --install   same, plus re-apply at boot and on every Docker restart
 #   sudo bash sandbox/network-setup.sh --status    show the network and rule counters
 #
 # Then set SANDBOX_NETWORK=remotepy-net in .env and restart the bot.
@@ -72,6 +72,8 @@ if [[ ${1:-} == "--install" ]]; then
 Description=Firewall for remotePython sandbox network
 After=docker.service
 Requires=docker.service
+# Re-run whenever Docker (re)starts, since Docker may rebuild its firewall chains.
+PartOf=docker.service
 
 [Service]
 Type=oneshot
@@ -79,9 +81,10 @@ ExecStart=/usr/local/sbin/remotepy-network-setup
 RemainAfterExit=yes
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target docker.service
 EOF
   systemctl daemon-reload
   systemctl enable remotepy-network.service >/dev/null
-  echo "Installed remotepy-network.service: rules are re-applied at every boot"
+  systemctl start remotepy-network.service
+  echo "Installed remotepy-network.service: rules are re-applied at boot and whenever Docker restarts"
 fi

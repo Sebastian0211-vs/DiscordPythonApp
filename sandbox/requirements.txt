@@ -10,6 +10,11 @@ sympy
 pillow
 scikit-learn
 tabulate
+jinja2
+# interactive plots (published as web pages when PAGES_URL is set)
+plotly
+altair
+bokeh
 requests
 beautifulsoup4
 # Jupyter: runs uploaded .ipynb notebooks, and notebook-style imports (IPython.display) work in scripts
@@ -17,6 +22,7 @@ ipython
 ipykernel
 nbclient
 nbformat
+nbconvert
 # CPU-only PyTorch adds ~1 GB to the image; uncomment if you want it:
 # --extra-index-url https://download.pytorch.org/whl/cpu
 # torch

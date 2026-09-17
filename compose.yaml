@@ -12,6 +12,8 @@ services:
       # Needed to start sandbox containers. Whoever controls the bot process
       # controls Docker on the VPS, so keep the token and this server safe.
       - /var/run/docker.sock:/var/run/docker.sock
+      # Interactive plot pages, served by the "pages" service below.
+      - pages:/pages
     read_only: true
     tmpfs: [/tmp]
     security_opt:
@@ -20,3 +22,22 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
+
+  # Serves interactive plot pages on 127.0.0.1:8088. Point a subdomain of your
+  # reverse proxy at it and set PAGES_URL in .env (see README "Interactive plots").
+  pages:
+    image: nginxinc/nginx-unprivileged:alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8088:8080"
+    volumes:
+      - pages:/pages:ro
+      - ./web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+volumes:
+  pages:

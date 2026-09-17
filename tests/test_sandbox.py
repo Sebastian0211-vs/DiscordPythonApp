@@ -223,3 +223,76 @@ def test_internet_network_blocks_host_and_private_ranges():
     """, SandboxConfig(timeout=20, network="remotepy-net"))
     assert "REACHED" not in r.output and r.output.count("blocked") == 4, r.output
     assert "dns " in r.output
+
+
+def test_pil_show_and_display_save_images_in_scripts():
+    r = run("""
+        from PIL import Image
+        from IPython.display import display
+        img = Image.new("RGB", (40, 20), "red")
+        img.show()
+        display(img, "text still prints")
+    """, SandboxConfig(timeout=30))
+    assert r.ok, r.output
+    assert "text still prints" in r.output and "PIL" not in r.output
+    assert [f.name for f in r.files] == ["image_1.png", "image_2.png"]
+    assert r.files[0].data[:4] == b"\x89PNG"
+
+
+def test_pil_show_inline_in_notebooks():
+    import json
+    nb = dict(NOTEBOOK, cells=[{"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+                                "source": "from PIL import Image\nImage.new('RGB', (40, 20), 'blue').show()"}])
+    r = asyncio.run(Sandbox(SandboxConfig(notebook_timeout=60)).run(json.dumps(nb), notebook=True))
+    assert [o.kind for o in r.cells[0].outputs] == ["image"], r.cells
+    assert r.files == []
+
+
+@pytest.mark.skipif(not _network_exists("remotepy-net"), reason="run sudo sandbox/network-setup.sh first")
+def test_firewall_check_passes_with_rules():
+    assert asyncio.run(Sandbox(SandboxConfig(network="remotepy-net")).check_firewall()) is None
+
+
+def test_firewall_check_reports_missing_network():
+    problem = asyncio.run(Sandbox(SandboxConfig(network="remotepy-missing-net")).check_firewall())
+    assert problem and "does not exist" in problem
+
+
+def test_styled_dataframe_renders_as_png():
+    import json
+    nb = dict(NOTEBOOK, cells=[{"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+                                "source": "import pandas as pd\n"
+                                          "pd.DataFrame({'a': [1, 2], 'b': [3, 1]}).corr().style.background_gradient(cmap='coolwarm')"}])
+    r = asyncio.run(Sandbox(SandboxConfig(notebook_timeout=60)).run(json.dumps(nb), notebook=True))
+    assert [o.kind for o in r.cells[0].outputs] == ["image"], r.cells
+    s = run("""
+        import pandas as pd
+        from IPython.display import display
+        display(pd.DataFrame({'a': [1, 2]}).style.highlight_max())
+    """, SandboxConfig(timeout=30))
+    assert s.ok and [f.name for f in s.files] == ["table_1.png"], s.output
+
+
+def test_interactive_figures_saved_as_html():
+    r = run("""
+        import plotly.express as px, altair as alt, pandas as pd
+        from bokeh.plotting import figure, show
+        px.scatter(x=[1, 2], y=[2, 1]).show()
+        alt.Chart(pd.DataFrame({"a": [1, 2]})).mark_point().encode(x="a").show()
+        p = figure(); p.line([1, 2], [2, 1]); show(p)
+    """, SandboxConfig(timeout=30))
+    assert r.ok, r.output
+    assert [f.name for f in r.files] == ["altair_1.html", "bokeh_1.html", "plotly_1.html"]
+    assert r.output.count("[interactive plot:") == 3
+    assert all(len(f.data) < 100_000 for f in r.files)  # libraries come from the CDN
+
+
+def test_interactive_figures_in_notebook():
+    import json
+    nb = dict(NOTEBOOK, cells=[
+        {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+         "source": "import plotly.express as px\npx.line(x=[1, 2], y=[2, 1])"},
+    ])
+    r = asyncio.run(Sandbox(SandboxConfig(notebook_timeout=60)).run(json.dumps(nb), notebook=True))
+    assert [f.name for f in r.files] == ["plotly_1.html"], r
+    assert "interactive plot: plotly_1.html" in r.cells[0].outputs[0].text

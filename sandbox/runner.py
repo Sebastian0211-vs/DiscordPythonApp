@@ -90,6 +90,7 @@ def run_script(code: str) -> dict:
         proc = subprocess.Popen(
             [sys.executable, "-u", str(script)],
             cwd=WORK_DIR,
+            env={**os.environ, "REMOTEPY_SCRIPT": "1"},  # sitecustomize: img.show() etc. save PNGs
             stdin=devnull,
             stdout=out,
             stderr=subprocess.STDOUT,
@@ -151,6 +152,7 @@ def run_notebook(source: str) -> dict:
 
     # The kernel should use Jupyter's inline plots, not the plt.show()-to-file backend.
     os.environ.pop("MPLBACKEND", None)
+    os.environ["REMOTEPY_NOTEBOOK"] = "1"  # sitecustomize: img.show() displays inline
     client = NotebookClient(nb, kernel_name="python3", allow_errors=False, record_timing=False,
                             resources={"metadata": {"path": str(WORK_DIR)}})
     timed_out, failed, error = False, False, None

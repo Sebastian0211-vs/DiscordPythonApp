@@ -11,7 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp \
     MPLCONFIGDIR=/tmp/.mpl
 
-COPY mpl_autosave.py /opt/sandbox_lib/mpl_autosave.py
+COPY mpl_autosave.py sitecustomize.py /opt/sandbox_lib/
 COPY requirements.txt /opt/requirements.txt
 RUN pip install -r /opt/requirements.txt \
     && MPLCONFIGDIR=/opt/mplcache python -c "import matplotlib.pyplot" \

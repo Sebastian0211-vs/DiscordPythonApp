@@ -26,16 +26,23 @@ somebody on the allowlist has to trigger it with one of the above.
   8 MB total per run.
 - **Output:** stdout and stderr merged. Long output shows its tail inline and the
   full log as `output.txt`. Files the script creates or changes in its folder are attached
-  (max 8 files, 8 MB), and `plt.show()` saves each figure as `figure_1.png`, `figure_2.png`, ...
+  (max 8 files, 8 MB). There's no screen, so "show" calls save images instead: `plt.show()`
+  gives `figure_1.png`, ..., `img.show()` (PIL) gives `image_1.png`, ..., and `display(...)` of an
+  image, figure or styled DataFrame is saved too. Styled tables (`df.style.background_gradient()`)
+  are rendered as images in notebooks as well, since Discord can't show HTML.
   Code pasted or uploaded through `/run` is attached too, so the chat can see what ran.
 - **Notebooks:** cells run in a real Jupyter kernel, top to bottom, stopping at the first
   error like "Run All". Each cell becomes an embed (red if it failed, grey if it never ran)
   with its output and inline plots, and the executed `.ipynb` is attached at the end.
   Notebooks get `NOTEBOOK_TIMEOUT` (120 s) in total.
+- **Interactive plots:** Plotly (`fig.show()`), Altair (`chart.show()`) and Bokeh (`show(p)`)
+  figures, in scripts and notebooks, become web pages. The bot posts a "📈" link button per
+  figure that opens the fully interactive plot (zoom, hover, 3D rotation) in the browser.
+  Links are unguessable and deleted after `PAGES_TTL_DAYS` (7). See "Interactive plots" below.
 - **Internet:** scripts can download (`requests.get(...)`) once the firewalled network is set
   up (step 2). They can't reach the VPS itself, other containers or private networks.
 - **Libraries:** numpy, pandas, scipy, matplotlib, seaborn, sympy, pillow, scikit-learn,
-  tabulate, requests, beautifulsoup4, ipython, ipykernel. To add one, put it in
+  tabulate, jinja2, plotly, altair, bokeh, requests, beautifulsoup4, ipython, ipykernel. To add one, put it in
   `sandbox/requirements.txt` and rebuild the sandbox image (no bot restart needed).
 
 ## How it works
@@ -121,6 +128,44 @@ docker build -t remotepy-sandbox:latest sandbox/   # only if sandbox/ changed
 docker compose up -d --build
 ```
 
+## Interactive plots
+
+The `pages` service in `compose.yaml` serves the plot pages on `127.0.0.1:8088` (only
+reachable from the VPS itself). Put it behind your reverse proxy on its **own subdomain**,
+e.g. `plots.example.com`: the pages run code from chat users, so don't share an origin with
+your other sites. Every response is also sandboxed with a `Content-Security-Policy: sandbox`
+header, so page scripts can't read your domain's cookies or storage.
+
+1. DNS: point `plots.example.com` at the VPS.
+2. Reverse proxy, depending on what you run:
+
+   **nginx** (`/etc/nginx/sites-available/plots`, then enable it and `sudo certbot --nginx -d plots.example.com`):
+   ```nginx
+   server {
+       server_name plots.example.com;
+       location / {
+           proxy_pass http://127.0.0.1:8088;
+           proxy_set_header Host $host;
+       }
+   }
+   ```
+
+   **Caddy** (`Caddyfile`, HTTPS is automatic):
+   ```
+   plots.example.com {
+       reverse_proxy 127.0.0.1:8088
+   }
+   ```
+
+   If your proxy itself runs in Docker, `127.0.0.1` is the proxy container, not the VPS:
+   put the proxy on the same Docker network as the `pages` service and use `http://pages:8080`.
+3. In `.env`: `PAGES_URL=https://plots.example.com`, then `sudo docker compose up -d --build`.
+   The bot logs "Interactive plots are published under ...".
+
+Without `PAGES_URL`, the `.html` files are attached to the reply instead (download and open
+them in a browser). The libraries load from their CDNs (cdn.plot.ly, cdn.jsdelivr.net,
+cdn.bokeh.org), so a viewer's browser needs internet access.
+
 ## 3. Strongly recommended: gVisor
 
 With the default runtime, sandbox containers share the VPS kernel, so a kernel
@@ -142,6 +187,9 @@ Then set `SANDBOX_RUNTIME=runsc` in `.env` and `docker compose up -d`.
 
 ## Security notes
 
+- **The bot checks the firewall** at startup, every 5 minutes and before a run whenever the
+  last check failed. If the rules are missing (for example after a reboot without `--install`),
+  it refuses to run code and logs how to fix it.
 - **Internet access means the VPS IP is used for whatever a script downloads or sends.**
   The firewall stops scripts from touching the VPS and your other services, not from
   misbehaving on the internet, so the allowlist matters. `sudo bash sandbox/network-setup.sh --status`
@@ -173,6 +221,9 @@ sandbox/Dockerfile        image the scripts run in
 sandbox/runner.py         runs inside it: executes the script with its data files, returns JSON with output + files
 sandbox/mpl_autosave.py   matplotlib backend that turns plt.show() into saved PNGs
 sandbox/network-setup.sh  creates the firewalled remotepy-net network (run once with sudo)
+sandbox/sitecustomize.py  makes img.show(), display(), styled DataFrames and interactive figures produce files
+src/remotepy/pages.py     publishes interactive plot pages and deletes expired ones
+web/nginx.conf            config of the pages web server (sandboxed, no directory listing)
 src/remotepy/sandbox.py   starts sandbox containers with all restrictions (also the remotepy-run CLI)
 src/remotepy/bot.py       Discord app: /run, /ids and the "Run Python" message command
 src/remotepy/messages.py  code extraction and reply formatting

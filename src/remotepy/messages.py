@@ -92,6 +92,7 @@ class MessageSpec:
     content: str = ""
     embeds: list[EmbedSpec] = field(default_factory=list)
     files: list[tuple[str, bytes]] = field(default_factory=list)
+    links: list[tuple[str, str]] = field(default_factory=list)  # (label, url) link buttons
 
 
 def _clip(text: str, limit: int) -> str:
@@ -142,7 +143,8 @@ def _cell_embeds(r: RunResult) -> list[tuple[EmbedSpec, tuple[str, bytes] | None
     return items
 
 
-def notebook_messages(r: RunResult, prefix: str, notebook_name: str) -> list[MessageSpec]:
+def notebook_messages(r: RunResult, prefix: str, notebook_name: str,
+                      links: list[tuple[str, str]] | None = None) -> list[MessageSpec]:
     """Split a notebook run into Discord messages: one embed per cell (plots inside the
     embed), grouped within Discord's per-message limits. The executed notebook and any
     files the notebook wrote go in the last message."""
@@ -186,6 +188,7 @@ def notebook_messages(r: RunResult, prefix: str, notebook_name: str) -> list[Mes
         last = MessageSpec()
         messages.append(last)
     last.files += extra[: FILES_PER_MESSAGE - len(last.files)]
+    last.links = list(links or [])[:25]
     if notes:
         note = "-# " + " · ".join(notes)
         last.content = f"{last.content}\n{note}".strip() if last.content else note
