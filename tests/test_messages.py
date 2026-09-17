@@ -45,3 +45,15 @@ def test_files_and_limits():
 def test_error_and_timeout():
     assert "out of memory" in format_result(RunResult(137, False, 0, "", error="killed, most likely out of memory"))[0]
     assert "timed out" in format_result(RunResult(None, True, 30, "partial"))[0]
+
+
+def test_any_language_fallback():
+    assert extract_code_block("```\nprint(1)\n```", any_language=True) == "print(1)\n"
+    assert extract_code_block("```js\nx\n```\n```py\ny\n```", any_language=True) == "y\n"
+
+
+def test_prefix_counts_toward_limit():
+    prefix = "@seb ran [a code block](https://discord.com/channels/@me/1/2)\n"
+    content, _ = format_result(RunResult(0, False, 1.0, "y" * 5000), prefix=prefix)
+    assert content.startswith(prefix) and len(content) <= DISCORD_LIMIT
+    assert content.count("```") == 2

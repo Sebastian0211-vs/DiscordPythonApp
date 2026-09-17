@@ -41,24 +41,19 @@ class SandboxConfig:
 @dataclass(frozen=True)
 class BotConfig:
     token: str
-    channel_ids: frozenset[int]
-    user_ids: frozenset[int] = field(default_factory=frozenset)
-    role_ids: frozenset[int] = field(default_factory=frozenset)
+    user_ids: frozenset[int]
+    channel_ids: frozenset[int] = field(default_factory=frozenset)  # empty = any chat
     max_code_bytes: int = 100_000
 
     @classmethod
     def from_env(cls) -> "BotConfig":
-        token = os.environ.get("DISCORD_TOKEN", "")
         cfg = cls(
-            token=token,
-            channel_ids=_ids("ALLOWED_CHANNEL_IDS"),
+            token=os.environ.get("DISCORD_TOKEN", ""),
             user_ids=_ids("ALLOWED_USER_IDS"),
-            role_ids=_ids("ALLOWED_ROLE_IDS"),
+            channel_ids=_ids("ALLOWED_CHANNEL_IDS"),
         )
-        if not token:
+        if not cfg.token:
             raise SystemExit("DISCORD_TOKEN is not set")
-        if not cfg.channel_ids:
-            raise SystemExit("ALLOWED_CHANNEL_IDS is empty: set the private channel(s) the bot listens in")
-        if not (cfg.user_ids or cfg.role_ids):
-            raise SystemExit("Set ALLOWED_USER_IDS and/or ALLOWED_ROLE_IDS: nobody is allowed to run code otherwise")
+        if not cfg.user_ids:
+            raise SystemExit("ALLOWED_USER_IDS is empty: nobody would be allowed to run code")
         return cfg

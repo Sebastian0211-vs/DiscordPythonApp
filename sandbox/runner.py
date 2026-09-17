@@ -24,7 +24,7 @@ from pathlib import Path
 
 TIMEOUT = float(os.environ.get("RUN_TIMEOUT", "30"))
 MAX_OUTPUT = int(os.environ.get("MAX_OUTPUT_BYTES", str(1_000_000)))
-MAX_FILES = int(os.environ.get("MAX_FILES", "9"))
+MAX_FILES = int(os.environ.get("MAX_FILES", "8"))
 MAX_FILES_BYTES = int(os.environ.get("MAX_FILES_BYTES", str(8 * 1024 * 1024)))
 
 RUN_DIR = Path("/tmp/.run")

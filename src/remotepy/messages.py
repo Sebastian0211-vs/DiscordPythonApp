@@ -5,12 +5,16 @@ import re
 from .sandbox import RunResult
 
 DISCORD_LIMIT = 2000
-CODE_BLOCK = re.compile(r"```(?:python3?|py)[ \t]*\r?\n(.*?)```", re.DOTALL | re.IGNORECASE)
+PY_BLOCK = re.compile(r"```(?:python3?|py)[ \t]*\r?\n(.*?)```", re.DOTALL | re.IGNORECASE)
+ANY_BLOCK = re.compile(r"```[\w+-]*[ \t]*\r?\n(.*?)```", re.DOTALL)
 
 
-def extract_code_block(text: str) -> str | None:
-    """Return the first ```python / ```py fenced block in a message, or None."""
-    m = CODE_BLOCK.search(text or "")
+def extract_code_block(text: str, any_language: bool = False) -> str | None:
+    """Return the first ```python / ```py fenced block, or None.
+    With any_language, fall back to the first fenced block of any (or no) language."""
+    m = PY_BLOCK.search(text or "")
+    if not m and any_language:
+        m = ANY_BLOCK.search(text or "")
     return m.group(1) if m else None
 
 
@@ -30,11 +34,11 @@ def status_line(r: RunResult) -> tuple[str, str]:
     return "❌", f"exit {r.exit_code} · {r.duration:.2f}s"
 
 
-def format_result(r: RunResult) -> tuple[str, list[tuple[str, bytes]]]:
+def format_result(r: RunResult, prefix: str = "") -> tuple[str, list[tuple[str, bytes]]]:
     """Build the reply text and attachments. Long output is attached as output.txt
     and the message shows its tail (tracebacks are at the end)."""
     emoji, status = status_line(r)
-    header = f"{emoji} **{status}**"
+    header = f"{prefix}{emoji} **{status}**"
     attachments: list[tuple[str, bytes]] = []
     notes: list[str] = []
 

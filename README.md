@@ -1,36 +1,39 @@
 # remotePython
 
-A Discord bot for your VPS. Post Python in a private channel and it runs in a
-throwaway, locked-down Docker container. The output (and any files the script
-saves, like plots) gets posted back as a reply.
+A Discord app you install on **your account** (not on a server) that runs Python
+in a throwaway, locked-down Docker container on your VPS. It works in private
+group chats and DMs, and the output (plus any files the script saves, like plots)
+is posted in the chat for everyone there to see.
 
-````
-you:  ```python
-      import numpy as np
-      print(np.linalg.eigvals([[2, 0], [0, 3]]))
-      ```
-bot:  ✅ exit 0 · 0.41s
-      [2. 3.]
-````
+## Using it
+
+| Where | What |
+|---|---|
+| `/run` | opens a box to paste code (code fences are fine), then posts the result |
+| `/run file:script.py` | runs an attached `.py` file |
+| Right-click a message > **Apps** > **Run Python** | runs the ` ```python ` block or `.py` file in that message |
+| `/ids` | shows your user ID and the current chat's ID, only to you |
+
+A user-installed app can't read chat messages, so it never runs code on its own:
+somebody on the allowlist has to trigger it with one of the above.
+
+- **Who can run code:** only `ALLOWED_USER_IDS`, optionally only in `ALLOWED_CHANNEL_IDS`.
+  Anyone else gets a private "not allowed" message.
+- **Output:** stdout and stderr merged. Long output shows its tail inline and the
+  full log as `output.txt`. Files written in the working directory
+  (`plt.savefig("plot.png")`, `df.to_csv("out.csv")`) are attached (max 8 files, 8 MB).
+  Code pasted or uploaded through `/run` is attached as `main.py` so the chat can see what ran.
+- **Libraries:** numpy, pandas, scipy, matplotlib, seaborn, sympy, pillow,
+  scikit-learn, tabulate. Edit `sandbox/requirements.txt` and rebuild to change.
+  Scripts cannot `pip install` at runtime (no network).
 
 ## How it works
 
 ```
-Discord channel ──> bot (container on VPS) ──stdin──> sandbox container ──JSON──> bot ──> reply
-                          │                           (no network, read-only,
-                          └── /var/run/docker.sock     non-root, limits, timeout)
+/run or "Run Python" ──> bot (container on VPS) ──stdin──> sandbox container ──JSON──> bot ──> message in the chat
+                               │                           (no network, read-only,
+                               └── /var/run/docker.sock     non-root, limits, timeout)
 ```
-
-- **Triggers:** a `.py` attachment, or a message with a ` ```python ` / ` ```py ` code block.
-- **Who:** only in `ALLOWED_CHANNEL_IDS` (and threads inside them), only for
-  `ALLOWED_USER_IDS` / `ALLOWED_ROLE_IDS`. Others get a 🚫 reaction.
-- **Output:** stdout and stderr merged. Long output shows its tail inline and the
-  full log as `output.txt`. Files written in the working directory
-  (`plt.savefig("plot.png")`, `df.to_csv("out.csv")`) are attached (max 9 files, 8 MB).
-- **Libraries:** numpy, pandas, scipy, matplotlib, seaborn, sympy, pillow,
-  scikit-learn, tabulate. Edit `sandbox/requirements.txt` and rebuild to change.
-  Scripts cannot `pip install` at runtime (no network).
-- **Reactions:** ⏳ running, ✅ exit 0, ❌ non-zero exit, ⏱️ timeout, 💥 sandbox killed (e.g. out of memory).
 
 ### Sandbox restrictions (every run)
 
@@ -45,15 +48,24 @@ Discord channel ──> bot (container on VPS) ──stdin──> sandbox contai
 
 All limits are configurable in `.env`.
 
-## 1. Create the Discord bot
+## 1. Create the Discord app
 
 1. <https://discord.com/developers/applications> > **New Application**.
-2. **Bot** tab: **Reset Token**, copy it. Turn on **Message Content Intent**. Turn off **Public Bot**.
-3. Invite it (replace `APP_ID` with the Application ID from **General Information**):
-   `https://discord.com/oauth2/authorize?client_id=APP_ID&scope=bot&permissions=274878008384`
-   (View Channels, Send Messages, Send Messages in Threads, Attach Files, Add Reactions, Read Message History).
-4. In Discord, enable **Settings > Advanced > Developer Mode**, then right-click the
-   private channel and yourself / your friends > **Copy ID**.
+2. **Installation** tab:
+   - **Installation Contexts:** tick **User Install**, untick **Guild Install**.
+   - **Install Link:** **None**, then save.
+3. **Bot** tab: **Reset Token** and copy it. Turn off **Public Bot**. No privileged
+   intents are needed.
+4. Install it on your account. Open this link, replacing `APP_ID` with the
+   Application ID from **General Information**, and choose **Add to my apps**:
+   `https://discord.com/oauth2/authorize?client_id=APP_ID&integration_type=1&scope=applications.commands`
+5. Get your user ID: **Settings > Advanced > Developer Mode** on, then right-click
+   your name > **Copy User ID**.
+
+Friends in the group chat see every result without installing anything. If a friend
+should also be able to *run* code, they open the same link and you add their ID to
+`ALLOWED_USER_IDS`. If Discord refuses the install for them, turn **Public Bot** on:
+anyone could then install the app, but only allowlisted IDs can run code.
 
 ## 2. Set up the Ubuntu VPS
 
@@ -75,10 +87,14 @@ On the VPS:
 ```bash
 cd ~/remotePython
 docker build -t remotepy-sandbox:latest sandbox/   # the image scripts run in
-cp .env.example .env && nano .env                  # token, channel IDs, user IDs
+cp .env.example .env && nano .env                  # token and your user ID
 docker compose up -d --build                       # start the bot
-docker compose logs -f bot                         # should say "Logged in as ..."
+docker compose logs -f bot                         # should say "Synced 3 global commands"
 ```
+
+The commands can take a minute to show up in Discord the first time. To lock it to
+one group chat, run `/ids` there, put the chat ID in `ALLOWED_CHANNEL_IDS` and run
+`docker compose up -d` again.
 
 Test the sandbox without Discord:
 
@@ -140,7 +156,7 @@ must all be contained.
 sandbox/Dockerfile        image the scripts run in
 sandbox/runner.py         runs inside it: executes the script, returns JSON with output + files
 src/remotepy/sandbox.py   starts sandbox containers with all restrictions (also the remotepy-run CLI)
-src/remotepy/bot.py       Discord bot
+src/remotepy/bot.py       Discord app: /run, /ids and the "Run Python" message command
 src/remotepy/messages.py  code extraction and reply formatting
 src/remotepy/config.py    settings from environment variables
 compose.yaml, Dockerfile  bot deployment

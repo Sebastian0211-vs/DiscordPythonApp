@@ -47,7 +47,7 @@ def test_libs_and_plot_file():
         import matplotlib.pyplot as plt
         plt.plot([1, 2, 3]); plt.savefig("plot.png")
         print("ok")
-    """)
+    """, SandboxConfig(timeout=30))  # first import after a (re)build is slow: cold disk cache
     assert r.ok, r.output
     assert [f.name for f in r.files] == ["plot.png"] and r.files[0].data[:4] == b"\x89PNG"
 
